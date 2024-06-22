@@ -76,6 +76,33 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         break;
 
+    case WM_PAINT:
+        {
+            PAINTSTRUCT Paint;
+            HDC DeviceContext = BeginPaint(hWnd, &Paint);
+            int X = Paint.rcPaint.left;
+            int Y = Paint.rcPaint.top;
+
+            int Width = Paint.rcPaint.right - Paint.rcPaint.left;
+            int Height = Paint.rcPaint.bottom - Paint.rcPaint.top;
+
+            static DWORD Operation = WHITENESS;
+
+            PatBlt(DeviceContext, X, Y, Width, Height, Operation);
+
+            if(Operation == WHITENESS)
+            {
+                Operation = BLACKNESS;
+            }
+            else
+            {
+                Operation = WHITENESS;
+            }
+
+            EndPaint(hWnd, &Paint);
+        }
+        break;
+
     default:
         {
             Result = DefWindowProcA(hWnd, uMsg, wParam, lParam);
