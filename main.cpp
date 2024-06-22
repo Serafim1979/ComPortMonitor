@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <thread>
 
 // Global variable
 bool global_running = false;
@@ -9,6 +10,8 @@ HANDLE hComm = INVALID_HANDLE_VALUE;
 HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxDataBits, hComboBoxParity, hComboBoxStopBits;
 HWND hButtonOpenPort, hCommandInput, hButtonSendCommand;
 HWND hDataOutput, hDataInput, hButtonSendData, hStatus;
+bool continueReading = true;
+HANDLE hThread;
 
 
 // Function prototypes
@@ -18,9 +21,12 @@ void PopulateBaudRates(HWND hwndComboBox);
 void PopulateDataBits(HWND hwndComboBox);
 void PopulateParity(HWND hwndComboBox);
 void PopulateStopBits(HWND hwndComboBox);
+void SetDefaultValues();
 void OnOpenPort(HWND hwnd);
 void OnSendCommand(HWND hwnd);
 void OnSendData(HWND hwnd);
+void ReadFromPort();
+
 
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
@@ -85,25 +91,32 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             // Create settings panel (left side)
             CreateWindow("STATIC", "Port Settings", WS_CHILD | WS_VISIBLE, 20, 20, 150, 20, hWnd, NULL, NULL, NULL);
 
-            hComboBoxPort = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 50, 150, 200, hWnd, NULL, NULL, NULL);
-            hComboBoxBaudRate = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 90, 150, 200, hWnd, NULL, NULL, NULL);
-            hComboBoxDataBits = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 130, 150, 200, hWnd, NULL, NULL, NULL);
-            hComboBoxParity = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 170, 150, 200, hWnd, NULL, NULL, NULL);
-            hComboBoxStopBits = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 210, 150, 200, hWnd, NULL, NULL, NULL);
+            CreateWindow("STATIC", "COM Port:", WS_CHILD | WS_VISIBLE, 20, 50, 150, 20, hWnd, NULL, NULL, NULL);
+            hComboBoxPort = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 70, 150, 200, hWnd, NULL, NULL, NULL);
 
-            hButtonOpenPort = CreateWindow("BUTTON", "Open Port", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 250, 150, 30, hWnd, (HMENU)1, NULL, NULL);
+            CreateWindow("STATIC", "Baud Rate:", WS_CHILD | WS_VISIBLE, 20, 110, 150, 20, hWnd, NULL, NULL, NULL);
+            hComboBoxBaudRate = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 130, 150, 200, hWnd, NULL, NULL, NULL);
 
-            CreateWindow("STATIC", "Command:", WS_CHILD | WS_VISIBLE, 20, 290, 150, 20, hWnd, NULL, NULL, NULL);
-            hCommandInput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 20, 320, 150, 20, hWnd, NULL, NULL, NULL);
-            hButtonSendCommand = CreateWindow("BUTTON", "Send Command", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 350, 150, 30, hWnd, (HMENU)2, NULL, NULL);
+            CreateWindow("STATIC", "Data Bits:", WS_CHILD | WS_VISIBLE, 20, 170, 150, 20, hWnd, NULL, NULL, NULL);
+            hComboBoxDataBits = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 190, 150, 200, hWnd, NULL, NULL, NULL);
+
+            CreateWindow("STATIC", "Parity:", WS_CHILD | WS_VISIBLE, 20, 230, 150, 20, hWnd, NULL, NULL, NULL);
+            hComboBoxParity = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 250, 150, 200, hWnd, NULL, NULL, NULL);
+
+            CreateWindow("STATIC", "Stop Bits:", WS_CHILD | WS_VISIBLE, 20, 290, 150, 20, hWnd, NULL, NULL, NULL);
+            hComboBoxStopBits = CreateWindow("COMBOBOX", NULL, CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_VISIBLE | WS_VSCROLL, 20, 310, 150, 200, hWnd, NULL, NULL, NULL);
+
+            hButtonOpenPort = CreateWindow("BUTTON", "Open Port", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 350, 150, 30, hWnd, (HMENU)1, NULL, NULL);
+
+            CreateWindow("STATIC", "Command/Data Input:", WS_CHILD | WS_VISIBLE, 20, 390, 150, 20, hWnd, NULL, NULL, NULL);
+            hCommandInput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 20, 410, 150, 20, hWnd, NULL, NULL, NULL);
+            hButtonSendCommand = CreateWindow("BUTTON", "Send Command/Data", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 440, 150, 30, hWnd, (HMENU)2, NULL, NULL);
 
             // Create data input/output area (right side)
-            hDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 200, 20, 360, 280, hWnd, NULL, NULL, NULL);
-            hDataInput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 200, 310, 360, 20, hWnd, NULL, NULL, NULL);
-            hButtonSendData = CreateWindow("BUTTON", "Send Data", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 200, 340, 360, 30, hWnd, (HMENU)3, NULL, NULL);
+            hDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 200, 20, 360, 400, hWnd, NULL, NULL, NULL);
 
             // Create status box
-            hStatus = CreateWindow("STATIC", "Status: Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 380, 540, 20, hWnd, NULL, NULL, NULL);
+            hStatus = CreateWindow("STATIC", "Status: Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 480, 540, 20, hWnd, NULL, NULL, NULL);
 
             // Populate combo boxes with options
             PopulateComPorts(hComboBoxPort);
@@ -111,6 +124,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             PopulateDataBits(hComboBoxDataBits);
             PopulateParity(hComboBoxParity);
             PopulateStopBits(hComboBoxStopBits);
+
+            // Set default values
+            SetDefaultValues();
 
             return 0;
         }
@@ -123,11 +139,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case 1: // Open Port button
                     OnOpenPort(hWnd);
                     break;
-                case 2: // Send Command button
+                case 2: // Send Command/Data button
                     OnSendCommand(hWnd);
-                    break;
-                case 3: // Send Data button
-                    OnSendData(hWnd);
                     break;
             }
         }
@@ -219,9 +232,19 @@ void PopulateStopBits(HWND hwndComboBox) {
     }
 }
 
+void SetDefaultValues() {
+    // Set default selections for each combo box
+    SendMessage(hComboBoxPort, CB_SETCURSEL, 0, 0); // Default to COM1
+    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0); // Default to 9600
+    SendMessage(hComboBoxDataBits, CB_SETCURSEL, 3, 0); // Default to 8 data bits
+    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Default to No Parity
+    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Default to 1 Stop Bit
+}
+
 void OnOpenPort(HWND hwnd) {
-    // Get selected port and settings from combo boxes
-    char portName[20], baudRate[20], dataBits[20], parity[20], stopBits[20];
+    char portName[256], baudRate[256], dataBits[256], parity[256], stopBits[256];
+
+    // Get settings from combo boxes
     GetWindowText(hComboBoxPort, portName, sizeof(portName));
     GetWindowText(hComboBoxBaudRate, baudRate, sizeof(baudRate));
     GetWindowText(hComboBoxDataBits, dataBits, sizeof(dataBits));
@@ -255,6 +278,10 @@ void OnOpenPort(HWND hwnd) {
     }
 
     SetWindowText(hStatus, "Status: Port Opened and Configured");
+
+    // Start the thread to read from the port
+    continueReading = true;
+    readThread = std::thread(ReadFromPort);
 }
 
 void OnSendCommand(HWND hwnd) {
@@ -263,28 +290,30 @@ void OnSendCommand(HWND hwnd) {
         return;
     }
 
+    // Get the command/data from the input field
     char command[256];
     GetWindowText(hCommandInput, command, sizeof(command));
     DWORD bytesWritten;
+
+    // Send the command/data to the device
     if (!WriteFile(hComm, command, strlen(command), &bytesWritten, NULL)) {
-        SetWindowText(hStatus, "Status: Error Sending Command");
+        SetWindowText(hStatus, "Status: Error Sending Command/Data");
     } else {
-        SetWindowText(hStatus, "Status: Command Sent");
+        SetWindowText(hStatus, "Status: Command/Data Sent");
     }
 }
 
-void OnSendData(HWND hwnd) {
-    if (hComm == INVALID_HANDLE_VALUE) {
-        SetWindowText(hStatus, "Status: Port Not Open");
-        return;
-    }
+void ReadFromPort() {
+    char buffer[256];
+    DWORD bytesRead;
 
-    char data[256];
-    GetWindowText(hDataInput, data, sizeof(data));
-    DWORD bytesWritten;
-    if (!WriteFile(hComm, data, strlen(data), &bytesWritten, NULL)) {
-        SetWindowText(hStatus, "Status: Error Sending Data");
-    } else {
-        SetWindowText(hStatus, "Status: Data Sent");
+    while (continueReading) {
+        if (ReadFile(hComm, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+            buffer[bytesRead] = '\0';
+            SendMessage(hDataOutput, EM_REPLACESEL, 0, (LPARAM)buffer);
+        } else {
+            SetWindowText(hStatus, "Status: Error Reading from Port");
+            continueReading = false;
+        }
     }
 }
