@@ -150,8 +150,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 void PopulateComPorts(HWND hwndComboBox) {
-    // Example COM ports
-    std::vector<std::string> comPorts = {"COM1", "COM2", "COM3", "COM4"};
+    std::vector<std::string> comPorts;
+    char portName[10];
+
+    // Проверяем порты от COM1 до COM256
+    for (int i = 1; i <= 256; ++i) {
+        snprintf(portName, sizeof(portName), "\\\\.\\COM%d", i); // Форматируем порт в виде \\.\COMx
+        HANDLE hComm = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (hComm != INVALID_HANDLE_VALUE) {
+            // Порт доступен
+            CloseHandle(hComm);
+            std::ostringstream oss;
+            oss << "COM" << i;
+            comPorts.push_back(oss.str());
+        }
+    }
+
+    // Добавляем найденные порты в комбобокс
     for (const auto& port : comPorts) {
         SendMessage(hwndComboBox, CB_ADDSTRING, 0, (LPARAM)port.c_str());
     }
