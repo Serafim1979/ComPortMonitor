@@ -242,6 +242,9 @@ void OnSendCommand(HWND hwnd) {
     // Get the command/data from the input field
     char command[256];
     GetWindowText(hCommandInput, command, sizeof(command));
+
+    strcat(command, "\r\n");
+
     DWORD bytesWritten;
 
     // Send the command/data to the device
@@ -250,6 +253,8 @@ void OnSendCommand(HWND hwnd) {
     } else {
         SetWindowText(hStatus, "Status: Command/Data Sent");
     }
+
+    Sleep(100);
 }
 
 DWORD WINAPI ReadFromPort(LPVOID lpParam) {
