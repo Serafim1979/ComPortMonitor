@@ -1,8 +1,8 @@
 #include <windows.h>
 #include <vector>
 #include <string>
+#include <thread>
 #include <sstream>
-#include <commctrl.h>
 
 // Function prototypes
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -14,19 +14,16 @@ void PopulateStopBits(HWND hwndComboBox);
 void SetDefaultValues();
 void OnOpenPort(HWND hwnd);
 void OnSendCommand(HWND hwnd);
+void OnSendData(HWND hwnd);
 DWORD WINAPI ReadFromPort(LPVOID lpParam);
-DWORD WINAPI WriteToPort(LPVOID lpParam);
 
 // Global variables
 HANDLE hComm = INVALID_HANDLE_VALUE;
 HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxDataBits, hComboBoxParity, hComboBoxStopBits;
 HWND hButtonOpenPort, hCommandInput, hButtonSendCommand;
-HWND hDataOutput, hStatus;
+HWND hDataOutput, hDataInput, hButtonSendData, hStatus;
 HANDLE hReadThread = NULL;
-DWORD dwReadThreadId;
 bool continueReading = true;
-std::string commandToSend;
-HANDLE hWriteThread = NULL;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     // Register window class
@@ -64,10 +61,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (hReadThread != NULL) {
         WaitForSingleObject(hReadThread, INFINITE);
         CloseHandle(hReadThread);
-    }
-
-    if (hComm != INVALID_HANDLE_VALUE) {
-        CloseHandle(hComm);
     }
 
     return 0;
@@ -130,18 +123,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
 
         case WM_DESTROY:
-            continueReading = false;
-            if (hReadThread != NULL) {
-                WaitForSingleObject(hReadThread, INFINITE);
-                CloseHandle(hReadThread);
-            }
-            if (hWriteThread != NULL) {
-                WaitForSingleObject(hWriteThread, INFINITE);
-                CloseHandle(hWriteThread);
-            }
-            if (hComm != INVALID_HANDLE_VALUE) {
-                CloseHandle(hComm);
-            }
             PostQuitMessage(0);
             return 0;
     }
@@ -173,7 +154,7 @@ void PopulateComPorts(HWND hwndComboBox) {
 }
 
 void PopulateBaudRates(HWND hwndComboBox) {
-    std::vector<std::string> baudRates = {"9600", "19200", "38400", "57600", "115200"};
+    std::vector<std::string> baudRates = {"9600", "14400", "19200", "38400", "57600", "115200"};
     for (const auto& rate : baudRates) {
         SendMessage(hwndComboBox, CB_ADDSTRING, 0, (LPARAM)rate.c_str());
     }
@@ -201,8 +182,9 @@ void PopulateStopBits(HWND hwndComboBox) {
 }
 
 void SetDefaultValues() {
-    SendMessage(hComboBoxPort, CB_SETCURSEL, 0, 0); // Default to first COM port
-    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 4, 0); // Default to 115200 baud rate
+    // Set default selections for each combo box
+    SendMessage(hComboBoxPort, CB_SETCURSEL, 0, 0); // Default to COM1
+    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0); // Default to 9600
     SendMessage(hComboBoxDataBits, CB_SETCURSEL, 3, 0); // Default to 8 data bits
     SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Default to No Parity
     SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Default to 1 Stop Bit
@@ -219,7 +201,7 @@ void OnOpenPort(HWND hwnd) {
     GetWindowText(hComboBoxStopBits, stopBits, sizeof(stopBits));
 
     // Open and configure the COM port
-    hComm = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+    hComm = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (hComm == INVALID_HANDLE_VALUE) {
         SetWindowText(hStatus, "Status: Error Opening Port");
         return;
@@ -230,8 +212,6 @@ void OnOpenPort(HWND hwnd) {
     dcb.DCBlength = sizeof(DCB);
     if (!GetCommState(hComm, &dcb)) {
         SetWindowText(hStatus, "Status: Error Getting Port State");
-        CloseHandle(hComm);
-        hComm = INVALID_HANDLE_VALUE;
         return;
     }
 
@@ -243,7 +223,6 @@ void OnOpenPort(HWND hwnd) {
     if (!SetCommState(hComm, &dcb)) {
         SetWindowText(hStatus, "Status: Error Setting Port State");
         CloseHandle(hComm);
-        hComm = INVALID_HANDLE_VALUE;
         return;
     }
 
@@ -251,7 +230,7 @@ void OnOpenPort(HWND hwnd) {
 
     // Start the thread to read from the port
     continueReading = true;
-    hReadThread = CreateThread(NULL, 0, ReadFromPort, NULL, 0, &dwReadThreadId);
+    hReadThread = CreateThread(NULL, 0, ReadFromPort, NULL, 0, NULL);
 }
 
 void OnSendCommand(HWND hwnd) {
@@ -263,106 +242,38 @@ void OnSendCommand(HWND hwnd) {
     // Get the command/data from the input field
     char command[256];
     GetWindowText(hCommandInput, command, sizeof(command));
-    commandToSend = command;
-
-    // Start the thread to write to the port
-    if (hWriteThread != NULL) {
-        WaitForSingleObject(hWriteThread, INFINITE);
-        CloseHandle(hWriteThread);
-    }
-    hWriteThread = CreateThread(NULL, 0, WriteToPort, NULL, 0, NULL);
-}
-
-DWORD WINAPI WriteToPort(LPVOID lpParam) {
-    if (hComm == INVALID_HANDLE_VALUE) {
-        return 1;
-    }
-
     DWORD bytesWritten;
-    OVERLAPPED osWrite = {0};
-    osWrite.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
-    if (osWrite.hEvent == NULL) {
-        SetWindowText(hStatus, "Status: Error Creating Write Event");
-        return 1;
+    // Send the command/data to the device
+    if (!WriteFile(hComm, command, strlen(command), &bytesWritten, NULL)) {
+        SetWindowText(hStatus, "Status: Error Sending Command/Data");
+    } else {
+        SetWindowText(hStatus, "Status: Command/Data Sent");
     }
-
-    // Write data
-    if (!WriteFile(hComm, commandToSend.c_str(), commandToSend.length(), &bytesWritten, &osWrite)) {
-        if (GetLastError() != ERROR_IO_PENDING) {
-            SetWindowText(hStatus, "Status: Error Sending Command/Data");
-            CloseHandle(osWrite.hEvent);
-            return 1;
-        }
-        else {
-            // Wait for the write to complete
-            DWORD dwRes = WaitForSingleObject(osWrite.hEvent, INFINITE);
-            switch(dwRes) {
-                case WAIT_OBJECT_0:
-                    if (!GetOverlappedResult(hComm, &osWrite, &bytesWritten, FALSE)) {
-                        SetWindowText(hStatus, "Status: Error Sending Command/Data");
-                        CloseHandle(osWrite.hEvent);
-                        return 1;
-                    }
-                    break;
-                default:
-                    SetWindowText(hStatus, "Status: Error Sending Command/Data");
-                    CloseHandle(osWrite.hEvent);
-                    return 1;
-            }
-        }
-    }
-
-    SetWindowText(hStatus, "Status: Command/Data Sent");
-    CloseHandle(osWrite.hEvent);
-    return 0;
 }
 
 DWORD WINAPI ReadFromPort(LPVOID lpParam) {
     char buffer[256];
     DWORD bytesRead;
-    OVERLAPPED osReader = {0};
-    osReader.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-
-    if (osReader.hEvent == NULL) {
-        SetWindowText(hStatus, "Status: Error Creating Read Event");
-        return 1;
-    }
 
     while (continueReading) {
-        if (!ReadFile(hComm, buffer, sizeof(buffer) - 1, &bytesRead, &osReader)) {
-            if (GetLastError() != ERROR_IO_PENDING) {
-                SetWindowText(hStatus, "Status: Error Reading Data");
-                break;
-            }
-            else {
-                // Wait for the read to complete
-                DWORD dwRes = WaitForSingleObject(osReader.hEvent, INFINITE);
-                switch(dwRes) {
-                    case WAIT_OBJECT_0:
-                        if (!GetOverlappedResult(hComm, &osReader, &bytesRead, FALSE)) {
-                            SetWindowText(hStatus, "Status: Error Reading Data");
-                            break;
-                        }
-                        break;
-                    default:
-                        SetWindowText(hStatus, "Status: Error Reading Data");
-                        break;
-                }
-            }
-        }
+        if (ReadFile(hComm, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
 
-        if (bytesRead > 0) {
-            buffer[bytesRead] = '\0'; // Null-terminate the string
-            // Append the received data to the data output window
-            int length = GetWindowTextLength(hDataOutput);
-            SendMessage(hDataOutput, EM_SETSEL, length, length);
-            SendMessage(hDataOutput, EM_REPLACESEL, 0, (LPARAM)buffer);
-        }
+            // Replace \n with \r\n to ensure new lines are correctly displayed
+            std::string output(buffer);
+            size_t pos = 0;
+            while ((pos = output.find('\n', pos)) != std::string::npos) {
+                output.insert(pos, "\r");
+                pos += 2; // Move past the newly inserted characters
+            }
 
-        Sleep(100); // Avoid busy-waiting
+            SendMessage(hDataOutput, EM_REPLACESEL, 0, (LPARAM)output.c_str());
+        } else {
+            SetWindowText(hStatus, "Status: Error Reading from Port");
+            continueReading = false;
+        }
     }
 
-    CloseHandle(osReader.hEvent);
     return 0;
 }
