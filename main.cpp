@@ -3,6 +3,7 @@
 #include <string>
 #include <thread>
 #include <sstream>
+#include <regex>
 
 // Function prototypes
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -16,6 +17,7 @@ void OnOpenPort(HWND hwnd);
 void OnSendCommand(HWND hwnd);
 void OnSendData(HWND hwnd);
 DWORD WINAPI ReadFromPort(LPVOID lpParam);
+std::string RemoveAnsiCodes(const std::string &input);
 
 // Global variables
 HANDLE hComm = INVALID_HANDLE_VALUE;
@@ -257,23 +259,29 @@ void OnSendCommand(HWND hwnd) {
     Sleep(100);
 }
 
+
 DWORD WINAPI ReadFromPort(LPVOID lpParam) {
     char buffer[256];
     DWORD bytesRead;
+    std::string data;
 
     while (continueReading) {
-        if (ReadFile(hComm, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+        if (ReadFile(hComm, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
             buffer[bytesRead] = '\0';
+            data.append(buffer);
 
-            // Replace \n with \r\n to ensure new lines are correctly displayed
-            std::string output(buffer);
-            size_t pos = 0;
-            while ((pos = output.find('\n', pos)) != std::string::npos) {
-                output.insert(pos, "\r");
-                pos += 2; // Move past the newly inserted characters
+            // Удаление управляющих символов ANSI
+            data = RemoveAnsiCodes(data);
+
+            // Добавляем CRLF в вывод (если это необходимо для корректного отображения)
+            for (char& c : data) {
+                if (c == '\r' || c == '\n') {
+                    c = '\n';
+                }
             }
 
-            SendMessage(hDataOutput, EM_REPLACESEL, 0, (LPARAM)output.c_str());
+            SendMessage(hDataOutput, EM_REPLACESEL, 0, (LPARAM)data.c_str());
+            data.clear();
         } else {
             SetWindowText(hStatus, "Status: Error Reading from Port");
             continueReading = false;
@@ -281,4 +289,10 @@ DWORD WINAPI ReadFromPort(LPVOID lpParam) {
     }
 
     return 0;
+}
+
+// Функция для удаления управляющих символов ANSI
+std::string RemoveAnsiCodes(const std::string &input) {
+    std::regex ansiRegex("\\x1B\\[[0-9;]*[A-Za-z]");
+    return std::regex_replace(input, ansiRegex, "");
 }
