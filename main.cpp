@@ -41,7 +41,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         0,
         CLASS_NAME,
         "COM Port Manager",
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, // Эти стили фиксируют размер окна
         CW_USEDEFAULT, CW_USEDEFAULT, 600, 600,
         NULL, NULL, hInstance, NULL
     );
@@ -96,7 +96,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             hButtonSendCommand = CreateWindow("BUTTON", "Send Command/Data", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 440, 150, 30, hwnd, (HMENU)2, NULL, NULL);
 
             // Create data input/output area (right side)
-            hDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 200, 20, 360, 400, hwnd, NULL, NULL, NULL);
+            hDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,200, 20, 360, 400, hwnd, NULL, NULL, NULL);
+
+
 
             // Create status box
             hStatus = CreateWindow("STATIC", "Status: Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 480, 540, 20, hwnd, NULL, NULL, NULL);
