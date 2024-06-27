@@ -1,11 +1,11 @@
 #include <windows.h>
 #include <vector>
+#include <iostream>
 #include <string>
 #include <thread>
 #include <sstream>
 #include <regex>
 
-// Function prototypes
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void PopulateComPorts(HWND hwndComboBox);
 void PopulateBaudRates(HWND hwndComboBox);
@@ -17,32 +17,31 @@ void OnOpenPort(HWND hwnd);
 void OnSendCommand(HWND hwnd);
 void OnSendData(HWND hwnd);
 DWORD WINAPI ReadFromPort(LPVOID lpParam);
+DWORD WINAPI WriteToPort(LPVOID lpParam);
 std::string RemoveAnsiCodes(const std::string &input);
 
-// Global variables
 HANDLE hComm = INVALID_HANDLE_VALUE;
 HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxDataBits, hComboBoxParity, hComboBoxStopBits;
 HWND hButtonOpenPort, hCommandInput, hButtonSendCommand;
-HWND hDataOutput, hDataInput, hButtonSendData, hStatus;
-HANDLE hReadThread = NULL;
+HWND hDataOutput, hRawDataOutput, hDataInput, hButtonSendData, hStatus;
+HANDLE hReadThread = NULL, hWriteThread = NULL;
 bool continueReading = true;
+bool continueWriting = true;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    // Register window class
     const char CLASS_NAME[] = "ComPortWindowClass";
-    WNDCLASS wc = { };
+    WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
     RegisterClass(&wc);
 
-    // Create window
     HWND hwnd = CreateWindowEx(
         0,
         CLASS_NAME,
         "COM Port Manager",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, // Эти стили фиксируют размер окна
-        CW_USEDEFAULT, CW_USEDEFAULT, 600, 600,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1200, 600,
         NULL, NULL, hInstance, NULL
     );
 
@@ -52,17 +51,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     ShowWindow(hwnd, nCmdShow);
 
-    // Run message loop
-    MSG msg = { };
+    MSG msg = {};
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
     continueReading = false;
+    continueWriting = false;
     if (hReadThread != NULL) {
         WaitForSingleObject(hReadThread, INFINITE);
         CloseHandle(hReadThread);
+    }
+    if (hWriteThread != NULL) {
+        WaitForSingleObject(hWriteThread, INFINITE);
+        CloseHandle(hWriteThread);
     }
 
     return 0;
@@ -71,7 +74,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE:
-            // Create settings panel (left side)
             CreateWindow("STATIC", "Port Settings", WS_CHILD | WS_VISIBLE, 20, 20, 150, 20, hwnd, NULL, NULL, NULL);
 
             CreateWindow("STATIC", "COM Port:", WS_CHILD | WS_VISIBLE, 20, 50, 150, 20, hwnd, NULL, NULL, NULL);
@@ -95,32 +97,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             hCommandInput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 20, 410, 150, 20, hwnd, NULL, NULL, NULL);
             hButtonSendCommand = CreateWindow("BUTTON", "Send Command/Data", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 20, 440, 150, 30, hwnd, (HMENU)2, NULL, NULL);
 
-            // Create data input/output area (right side)
-            hDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,200, 20, 360, 400, hwnd, NULL, NULL, NULL);
+            hDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL, 200, 20, 460, 400, hwnd, NULL, NULL, NULL);
 
+            hRawDataOutput = CreateWindow("EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL, 680, 20, 460, 400, hwnd, NULL, NULL, NULL);
 
-
-            // Create status box
             hStatus = CreateWindow("STATIC", "Status: Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 480, 540, 20, hwnd, NULL, NULL, NULL);
 
-            // Populate combo boxes with options
             PopulateComPorts(hComboBoxPort);
             PopulateBaudRates(hComboBoxBaudRate);
             PopulateDataBits(hComboBoxDataBits);
             PopulateParity(hComboBoxParity);
             PopulateStopBits(hComboBoxStopBits);
 
-            // Set default values
             SetDefaultValues();
-
             return 0;
 
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
-                case 1: // Open Port button
+                case 1:
                     OnOpenPort(hwnd);
                     break;
-                case 2: // Send Command/Data button
+                case 2:
                     OnSendCommand(hwnd);
                     break;
             }
@@ -130,28 +127,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             PostQuitMessage(0);
             return 0;
     }
-
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 void PopulateComPorts(HWND hwndComboBox) {
     std::vector<std::string> comPorts;
     char portName[10];
-
-    // Проверяем порты от COM1 до COM256
     for (int i = 1; i <= 256; ++i) {
-        snprintf(portName, sizeof(portName), "\\\\.\\COM%d", i); // Форматируем порт в виде \\.\COMx
+        snprintf(portName, sizeof(portName), "\\\\.\\COM%d", i);
         HANDLE hComm = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
         if (hComm != INVALID_HANDLE_VALUE) {
-            // Порт доступен
             CloseHandle(hComm);
             std::ostringstream oss;
             oss << "COM" << i;
             comPorts.push_back(oss.str());
         }
     }
-
-    // Добавляем найденные порты в комбобокс
     for (const auto& port : comPorts) {
         SendMessage(hwndComboBox, CB_ADDSTRING, 0, (LPARAM)port.c_str());
     }
@@ -186,115 +177,175 @@ void PopulateStopBits(HWND hwndComboBox) {
 }
 
 void SetDefaultValues() {
-    // Set default selections for each combo box
-    SendMessage(hComboBoxPort, CB_SETCURSEL, 0, 0); // Default to COM1
-    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0); // Default to 9600
-    SendMessage(hComboBoxDataBits, CB_SETCURSEL, 3, 0); // Default to 8 data bits
-    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Default to No Parity
-    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Default to 1 Stop Bit
+    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 5, 0);
+    SendMessage(hComboBoxDataBits, CB_SETCURSEL, 3, 0);
+    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0);
+    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0);
 }
 
 void OnOpenPort(HWND hwnd) {
-    char portName[256], baudRate[256], dataBits[256], parity[256], stopBits[256];
-
-    // Get settings from combo boxes
-    GetWindowText(hComboBoxPort, portName, sizeof(portName));
-    GetWindowText(hComboBoxBaudRate, baudRate, sizeof(baudRate));
-    GetWindowText(hComboBoxDataBits, dataBits, sizeof(dataBits));
-    GetWindowText(hComboBoxParity, parity, sizeof(parity));
-    GetWindowText(hComboBoxStopBits, stopBits, sizeof(stopBits));
-
-    // Open and configure the COM port
-    hComm = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if (hComm == INVALID_HANDLE_VALUE) {
-        SetWindowText(hStatus, "Status: Error Opening Port");
-        return;
-    }
-
-    DCB dcb;
-    ZeroMemory(&dcb, sizeof(DCB));
-    dcb.DCBlength = sizeof(DCB);
-    if (!GetCommState(hComm, &dcb)) {
-        SetWindowText(hStatus, "Status: Error Getting Port State");
-        return;
-    }
-
-    dcb.BaudRate = std::stoi(baudRate);
-    dcb.ByteSize = std::stoi(dataBits);
-    dcb.Parity = (parity == std::string("None")) ? NOPARITY : ((parity == std::string("Odd")) ? ODDPARITY : ((parity == std::string("Even")) ? EVENPARITY : ((parity == std::string("Mark")) ? MARKPARITY : SPACEPARITY)));
-    dcb.StopBits = (stopBits == std::string("1")) ? ONESTOPBIT : ((stopBits == std::string("1.5")) ? ONE5STOPBITS : TWOSTOPBITS);
-
-    if (!SetCommState(hComm, &dcb)) {
-        SetWindowText(hStatus, "Status: Error Setting Port State");
+    if (hComm != INVALID_HANDLE_VALUE) {
         CloseHandle(hComm);
+        hComm = INVALID_HANDLE_VALUE;
+        SetWindowText(hStatus, "Status: Port closed");
         return;
     }
 
-    SetWindowText(hStatus, "Status: Port Opened and Configured");
+    char portName[10];
+    GetWindowText(hComboBoxPort, portName, sizeof(portName));
 
-    // Start the thread to read from the port
+    hComm = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+    if (hComm == INVALID_HANDLE_VALUE) {
+        SetWindowText(hStatus, "Status: Failed to open port");
+        return;
+    }
+
+    DCB dcbSerialParams = {0};
+    dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
+
+    if (!GetCommState(hComm, &dcbSerialParams)) {
+        SetWindowText(hStatus, "Status: Failed to get port settings");
+        CloseHandle(hComm);
+        hComm = INVALID_HANDLE_VALUE;
+        return;
+    }
+
+    char baudRateStr[10];
+    char dataBitsStr[10];
+    char parityStr[10];
+    char stopBitsStr[10];
+
+    GetWindowText(hComboBoxBaudRate, baudRateStr, sizeof(baudRateStr));
+    GetWindowText(hComboBoxDataBits, dataBitsStr, sizeof(dataBitsStr));
+    GetWindowText(hComboBoxParity, parityStr, sizeof(parityStr));
+    GetWindowText(hComboBoxStopBits, stopBitsStr, sizeof(stopBitsStr));
+
+    int baudRate = atoi(baudRateStr);
+    int dataBits = atoi(dataBitsStr);
+    int stopBits = atoi(stopBitsStr);
+
+    dcbSerialParams.BaudRate = baudRate;
+    dcbSerialParams.ByteSize = dataBits;
+    dcbSerialParams.StopBits = stopBits == 1 ? ONESTOPBIT : stopBits == 2 ? TWOSTOPBITS : ONE5STOPBITS;
+    dcbSerialParams.Parity = parityStr[0] == 'N' ? NOPARITY : parityStr[0] == 'O' ? ODDPARITY : parityStr[0] == 'E' ? EVENPARITY : parityStr[0] == 'M' ? MARKPARITY : SPACEPARITY;
+
+    if (!SetCommState(hComm, &dcbSerialParams)) {
+        SetWindowText(hStatus, "Status: Failed to set port settings");
+        CloseHandle(hComm);
+        hComm = INVALID_HANDLE_VALUE;
+        return;
+    }
+
+    COMMTIMEOUTS timeouts = {0};
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutConstant = 50;
+    timeouts.ReadTotalTimeoutMultiplier = 10;
+    timeouts.WriteTotalTimeoutConstant = 50;
+    timeouts.WriteTotalTimeoutMultiplier = 10;
+
+    if (!SetCommTimeouts(hComm, &timeouts)) {
+        SetWindowText(hStatus, "Status: Failed to set port timeouts");
+        CloseHandle(hComm);
+        hComm = INVALID_HANDLE_VALUE;
+        return;
+    }
+
+    SetWindowText(hStatus, "Status: Port opened");
+
     continueReading = true;
     hReadThread = CreateThread(NULL, 0, ReadFromPort, NULL, 0, NULL);
 }
 
 void OnSendCommand(HWND hwnd) {
-    if (hComm == INVALID_HANDLE_VALUE) {
-        SetWindowText(hStatus, "Status: Port Not Open");
-        return;
-    }
-
-    // Get the command/data from the input field
     char command[256];
     GetWindowText(hCommandInput, command, sizeof(command));
 
-    strcat(command, "\r\n");
-
-    DWORD bytesWritten;
-
-    // Send the command/data to the device
-    if (!WriteFile(hComm, command, strlen(command), &bytesWritten, NULL)) {
-        SetWindowText(hStatus, "Status: Error Sending Command/Data");
-    } else {
-        SetWindowText(hStatus, "Status: Command/Data Sent");
-    }
-
-    Sleep(100);
+    continueWriting = true;
+    hWriteThread = CreateThread(NULL, 0, WriteToPort, command, 0, NULL);
 }
 
-
 DWORD WINAPI ReadFromPort(LPVOID lpParam) {
-    char buffer[256];
+    char readBuf[256];
     DWORD bytesRead;
-    std::string data;
+    OVERLAPPED osReader = {0};
+    osReader.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+    if (osReader.hEvent == NULL) {
+        SetWindowText(hStatus, "Status: Failed to create read event");
+        return 1;
+    }
 
     while (continueReading) {
-        if (ReadFile(hComm, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
-            buffer[bytesRead] = '\0';
-            data.append(buffer);
-
-            // Удаление управляющих символов ANSI
-            data = RemoveAnsiCodes(data);
-
-            // Добавляем CRLF в вывод (если это необходимо для корректного отображения)
-            for (char& c : data) {
-                if (c == '\r' || c == '\n') {
-                    c = '\n';
-                }
+        if (!ReadFile(hComm, readBuf, sizeof(readBuf), &bytesRead, &osReader)) {
+            if (GetLastError() != ERROR_IO_PENDING) {
+                SetWindowText(hStatus, "Status: Read error");
+                continueReading = false;
+                break;
             }
 
-            SendMessage(hDataOutput, EM_REPLACESEL, 0, (LPARAM)data.c_str());
-            data.clear();
-        } else {
-            SetWindowText(hStatus, "Status: Error Reading from Port");
-            continueReading = false;
+            WaitForSingleObject(osReader.hEvent, INFINITE);
+
+            if (!GetOverlappedResult(hComm, &osReader, &bytesRead, FALSE)) {
+                SetWindowText(hStatus, "Status: GetOverlappedResult failed");
+                continueReading = false;
+                break;
+            }
+        }
+
+        if (bytesRead > 0) {
+            readBuf[bytesRead] = '\0';
+            std::string data(readBuf);
+            std::string cleanedData = RemoveAnsiCodes(data);
+
+            std::ostringstream oss;
+            for (DWORD i = 0; i < bytesRead; ++i) {
+                oss << std::hex << std::uppercase << (int)readBuf[i] << " ";
+            }
+
+            SetWindowText(hDataOutput, cleanedData.c_str());
+            SetWindowText(hRawDataOutput, oss.str().c_str());
         }
     }
 
+    CloseHandle(osReader.hEvent);
     return 0;
 }
 
-// Функция для удаления управляющих символов ANSI
+DWORD WINAPI WriteToPort(LPVOID lpParam) {
+    char* command = (char*)lpParam;
+    DWORD bytesWritten;
+    OVERLAPPED osWriter = {0};
+    osWriter.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+    if (osWriter.hEvent == NULL) {
+        SetWindowText(hStatus, "Status: Failed to create write event");
+        return 1;
+    }
+
+    if (!WriteFile(hComm, command, strlen(command), &bytesWritten, &osWriter)) {
+        if (GetLastError() != ERROR_IO_PENDING) {
+            SetWindowText(hStatus, "Status: Write error");
+            continueWriting = false;
+            CloseHandle(osWriter.hEvent);
+            return 1;
+        }
+
+        WaitForSingleObject(osWriter.hEvent, INFINITE);
+
+        if (!GetOverlappedResult(hComm, &osWriter, &bytesWritten, FALSE)) {
+            SetWindowText(hStatus, "Status: GetOverlappedResult failed");
+            continueWriting = false;
+            CloseHandle(osWriter.hEvent);
+            return 1;
+        }
+    }
+
+    SetWindowText(hStatus, "Status: Command sent");
+    CloseHandle(osWriter.hEvent);
+    return 0;
+}
+
 std::string RemoveAnsiCodes(const std::string &input) {
-    std::regex ansiRegex("\\x1B\\[[0-9;]*[A-Za-z]");
-    return std::regex_replace(input, ansiRegex, "");
+    std::regex ansi_regex("\\x1B\\[[0-9;]*[a-zA-Z]");
+    return std::regex_replace(input, ansi_regex, "");
 }
